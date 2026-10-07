@@ -1,0 +1,34 @@
+project:
+  raw_data_dir: data/raw
+  quality_data_dir: data/quality
+
+http:
+  timeout_seconds: 30
+  retries: 3
+  backoff_factor: 0.5
+  user_agent: citibike-demand-forecasting/0.1.0
+
+sources:
+  citibike:
+    discovery_url: https://gbfs.citibikenyc.com/gbfs/gbfs.json
+    feeds:
+      - station_information
+      - station_status
+
+  weather:
+    url: https://api.open-meteo.com/v1/forecast
+    latitude: 40.7128
+    longitude: -74.0060
+    timezone: America/New_York
+    forecast_days: 7
+    hourly:
+      - temperature_2m
+      - relative_humidity_2m
+      - precipitation
+      - weather_code
+      - wind_speed_10m
+
+  traffic:
+    url: https://data.cityofnewyork.us/resource/i4gi-tjb9.json
+    limit: 5000
+    latest_per_link: true
