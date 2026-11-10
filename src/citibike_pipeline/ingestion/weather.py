@@ -1,4 +1,4 @@
-"""Incremental Open-Meteo Historical Weather ingestion."""
+﻿"""Incremental Open-Meteo Historical Weather ingestion."""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ def _rows(payload: dict[str, Any], load_id: int) -> list[dict[str, Any]]:
     )
     frame["observed_at"] = (
         pd.to_datetime(frame["observed_at"], errors="coerce")
-        .dt.tz_localize("America/New_York", ambiguous="NaT", nonexistent="shift_forward")
+        .dt.tz_localize("America/New_York", ambiguous=False, nonexistent="shift_forward")
         .dt.tz_convert("UTC")
     )
     for col in frame.columns:
@@ -133,3 +133,4 @@ def ingest(
     except Exception as exc:
         finish_load(load_id, status="FAILED", error=exc, engine=db)
         raise
+

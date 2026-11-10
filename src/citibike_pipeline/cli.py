@@ -1,4 +1,4 @@
-"""Command-line interface for the end-to-end ingestion layer."""
+"""Command-line interface for the Citi Bike data platform."""
 
 from __future__ import annotations
 
@@ -11,8 +11,15 @@ from citibike_pipeline.database.connection import database_healthcheck, get_engi
 from citibike_pipeline.database.metadata import list_watermarks
 from citibike_pipeline.http import HttpClient, SourceRequestError
 from citibike_pipeline.ingestion import citibike_trips, gbfs, traffic, weather
+from citibike_pipeline.quality import (
+    check_all_schemas,
+    quarantine_invalid_records,
+    run_quality_checks,
+    summarize,
+)
 
 SOURCES = ("citibike_trips", "citibike_gbfs", "weather", "traffic")
+DQ_DATASETS = ("citibike_trips", "weather", "traffic", "gbfs")
 
 
 def _print_result(name: str, value: object) -> None:
@@ -73,6 +80,59 @@ def _health(_: argparse.Namespace) -> int:
     return 1
 
 
+def _dq(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    engine = get_engine()
+
+    print(f"Running warehouse DQ checks: dataset={args.dataset}")
+    results = run_quality_checks(config, dataset=args.dataset, engine=engine)
+
+    for result in results:
+        failed = result.failed_rows if result.failed_rows is not None else "-"
+        print(
+            f"[{result.status:<4}] "
+            f"{result.check_type:<22} "
+            f"{result.dataset_name:<32} "
+            f"{result.check_name} failed={failed}"
+        )
+
+    summary = summarize(results)
+    print(
+        "\nDQ summary: "
+        f"PASS={summary.get('PASS', 0)} "
+        f"WARN={summary.get('WARN', 0)} "
+        f"FAIL={summary.get('FAIL', 0)}"
+    )
+
+    if args.quarantine:
+        quarantined = quarantine_invalid_records(dataset=args.dataset, engine=engine)
+        print("\nQuarantine:")
+        for name, count in quarantined.items():
+            print(f"  {name}: inserted={count}")
+
+    # DQ failures are persisted and shown to the user. Do not make the CLI unusable
+    # for exploratory/operational runs simply because source data contains defects.
+    return 0
+
+
+def _schema_check(_: argparse.Namespace) -> int:
+    results = check_all_schemas()
+    breaking = False
+    for item in results:
+        print(
+            f"[{item['status']:<10}] {item['dataset']:<36} "
+            f"version={item['version']} breaking={item['breaking']}"
+        )
+        breaking = breaking or bool(item["breaking"])
+
+    if breaking:
+        print(
+            "\nBreaking schema drift was registered. "
+            "Review meta.schema_changes before downstream processing."
+        )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="citibike-pipeline")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -96,6 +156,30 @@ def build_parser() -> argparse.ArgumentParser:
 
     health_parser = sub.add_parser("db-health", help="check PostgreSQL connectivity")
     health_parser.set_defaults(handler=_health)
+
+    dq_parser = sub.add_parser(
+        "dq",
+        help="run persisted PostgreSQL data-quality checks",
+    )
+    dq_parser.add_argument(
+        "--dataset",
+        choices=("all", *DQ_DATASETS),
+        default="all",
+    )
+    dq_parser.add_argument(
+        "--quarantine",
+        action="store_true",
+        help="copy invalid RAW records to quarantine.rejected_records",
+    )
+    dq_parser.add_argument("--config", help="path to config YAML")
+    dq_parser.set_defaults(handler=_dq)
+
+    schema_parser = sub.add_parser(
+        "schema-check",
+        help="register schemas and detect schema drift",
+    )
+    schema_parser.set_defaults(handler=_schema_check)
+
     return parser
 
 
