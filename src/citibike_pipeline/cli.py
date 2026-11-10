@@ -144,18 +144,53 @@ def _transform(_: argparse.Namespace) -> int:
     engine = get_engine()
 
     print("\n==> Synchronizing SCD2 station dimension")
-    station_result = sync_station_dimension(engine)
-    _print_result("silver.dim_station", station_result)
+    _print_result("silver.dim_station", sync_station_dimension(engine))
 
     print("\n==> Loading valid SILVER trip fact")
-    fact_result = load_fact_trips(engine)
-    _print_result("silver.fact_trip", fact_result)
+    _print_result("silver.fact_trip", load_fact_trips(engine))
 
     print("\n==> Running dbt build")
     run_dbt(("build",))
 
     print("\n==> Warehouse counts")
     _print_result("warehouse", warehouse_counts(engine))
+    return 0
+
+
+def _train(args: argparse.Namespace) -> int:
+    from citibike_pipeline.ml import train_forecasting_pipeline
+
+    config = load_config(args.config)
+    result = train_forecasting_pipeline(
+        config,
+        top_stations=args.top_stations,
+        iterations=args.iterations,
+        smoke=args.smoke,
+        persist=not args.no_persist,
+        engine=get_engine(),
+    )
+    _print_result(
+        "forecast_training",
+        {
+            "model_version": result["model_version"],
+            "top_stations": result["top_stations"],
+            "train_rows": result["train_rows"],
+            "validation_rows": result["validation_rows"],
+            "test_rows": result["test_rows"],
+            "coverage": result["coverage"],
+            "baseline_test": result["baseline_test"],
+            "selected_feature_set": result["selected_feature_set"],
+            "catboost_test": result["catboost_test"],
+            "persisted": result["persisted"],
+        },
+    )
+    return 0
+
+
+def _model_metrics(args: argparse.Namespace) -> int:
+    from citibike_pipeline.ml.persistence import list_metrics
+
+    _print_result("model_metrics", list_metrics(limit=args.limit, engine=get_engine()))
     return 0
 
 
@@ -170,19 +205,9 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_parser.add_argument("--end-month", help="Citi Bike last month, YYYY-MM")
     ingest_parser.add_argument("--start-date", help="Weather first date, YYYY-MM-DD")
     ingest_parser.add_argument("--end-date", help="Weather last date, YYYY-MM-DD")
-    ingest_parser.add_argument(
-        "--traffic-since-hours",
-        type=int,
-        help="Traffic bootstrap lookback when no watermark exists",
-    )
-    ingest_parser.add_argument(
-        "--traffic-start-date",
-        help="Historical traffic backfill first date, YYYY-MM-DD",
-    )
-    ingest_parser.add_argument(
-        "--traffic-end-date",
-        help="Historical traffic backfill last date, YYYY-MM-DD (inclusive)",
-    )
+    ingest_parser.add_argument("--traffic-since-hours", type=int)
+    ingest_parser.add_argument("--traffic-start-date")
+    ingest_parser.add_argument("--traffic-end-date")
     ingest_parser.set_defaults(handler=_ingest)
 
     wm_parser = sub.add_parser("watermarks", help="show incremental source watermarks")
@@ -193,11 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     dq_parser = sub.add_parser("dq", help="run persisted PostgreSQL data-quality checks")
     dq_parser.add_argument("--dataset", choices=("all", *DQ_DATASETS), default="all")
-    dq_parser.add_argument(
-        "--quarantine",
-        action="store_true",
-        help="copy invalid RAW records to quarantine.rejected_records",
-    )
+    dq_parser.add_argument("--quarantine", action="store_true")
     dq_parser.add_argument("--config", help="path to config YAML")
     dq_parser.set_defaults(handler=_dq)
 
@@ -219,6 +240,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="build SCD2 dimension, SILVER fact and dbt SILVER/GOLD marts",
     )
     transform_parser.set_defaults(handler=_transform)
+
+    train_parser = sub.add_parser(
+        "train",
+        help="train Seasonal Naive and CatBoost demand forecasting models",
+    )
+    train_parser.add_argument("--config", help="path to config YAML")
+    train_parser.add_argument("--top-stations", type=int)
+    train_parser.add_argument("--iterations", type=int)
+    train_parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="fast 20-station/25-iteration validation without persistence",
+    )
+    train_parser.add_argument(
+        "--no-persist",
+        action="store_true",
+        help="do not write model metrics, forecasts or artifacts",
+    )
+    train_parser.set_defaults(handler=_train)
+
+    metrics_parser = sub.add_parser(
+        "model-metrics",
+        help="show the latest persisted model evaluation metrics",
+    )
+    metrics_parser.add_argument("--limit", type=int, default=30)
+    metrics_parser.set_defaults(handler=_model_metrics)
 
     return parser
 

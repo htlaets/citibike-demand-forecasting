@@ -56,7 +56,6 @@ sources:
     bootstrap_since_hours: 24
 
 quality:
-  # Freshness thresholds reflect source publication cadence, not one universal SLA.
   freshness_hours:
     citibike_trips: 1488
     citibike_gbfs: 2
@@ -64,3 +63,20 @@ quality:
     traffic: 12
   station_latitude_range: [40.0, 42.0]
   station_longitude_range: [-75.0, -72.0]
+
+modeling:
+  # The analytical mart still covers all stations. The forecasting experiment
+  # uses the busiest stations so training is reproducible on a student laptop.
+  top_stations: 250
+  validation_days: 4
+  test_days: 5
+
+  catboost:
+    iterations: 180
+    depth: 8
+    learning_rate: 0.08
+    l2_leaf_reg: 5.0
+    early_stopping_rounds: 30
+    random_seed: 42
+    thread_count: -1
+    verbose: 50
