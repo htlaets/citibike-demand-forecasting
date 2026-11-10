@@ -13,6 +13,14 @@ from sqlalchemy.engine import make_url
 from citibike_pipeline.database.connection import get_database_url
 
 
+def _project_root() -> Path:
+    configured = os.getenv("CITIBIKE_PROJECT_ROOT")
+    if configured:
+        return Path(configured).resolve()
+    # .../src/citibike_pipeline/transform/dbt_runner.py -> repository root
+    return Path(__file__).resolve().parents[3]
+
+
 def _dbt_env() -> dict[str, str]:
     url = make_url(get_database_url())
     if url.get_backend_name() not in {"postgresql", "postgres"}:
@@ -32,12 +40,13 @@ def _dbt_env() -> dict[str, str]:
 
 
 def run_dbt(arguments: Sequence[str] = ("build",)) -> int:
-    """Execute dbt in the repository-local project/profile directories."""
-    project_dir = Path("dbt")
+    """Execute dbt using paths that work both locally and inside Airflow."""
+    root = _project_root()
+    project_dir = root / "dbt"
     profiles_dir = project_dir / "profiles"
 
     if not project_dir.exists():
-        raise RuntimeError("dbt project directory not found: ./dbt")
+        raise RuntimeError(f"dbt project directory not found: {project_dir}")
 
     command = [
         sys.executable,
@@ -49,7 +58,12 @@ def run_dbt(arguments: Sequence[str] = ("build",)) -> int:
         "--profiles-dir",
         str(profiles_dir),
     ]
-    completed = subprocess.run(command, env=_dbt_env(), check=False)
+    completed = subprocess.run(
+        command,
+        env=_dbt_env(),
+        cwd=str(root),
+        check=False,
+    )
     if completed.returncode != 0:
         raise RuntimeError(f"dbt {' '.join(arguments)} failed with code {completed.returncode}")
     return completed.returncode
