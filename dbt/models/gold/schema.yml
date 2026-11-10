@@ -1,0 +1,21 @@
+version: 2
+
+models:
+  - name: station_hourly_demand
+    description: Station-hour demand mart and the main feature base for forecasting.
+    columns:
+      - name: observed_hour
+        tests:
+          - not_null
+      - name: station_sk
+        tests:
+          - not_null
+      - name: station_id
+        tests:
+          - not_null
+      - name: rides_started
+        tests:
+          - not_null
+      - name: rides_ended
+        tests:
+          - not_null

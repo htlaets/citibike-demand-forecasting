@@ -58,6 +58,8 @@ def _ingest(args: argparse.Namespace) -> int:
                 client,
                 config,
                 since_hours=args.traffic_since_hours,
+                start_date=args.traffic_start_date,
+                end_date=args.traffic_end_date,
                 engine=engine,
             )
         _print_result(name, result)
@@ -83,7 +85,6 @@ def _health(_: argparse.Namespace) -> int:
 def _dq(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     engine = get_engine()
-
     print(f"Running warehouse DQ checks: dataset={args.dataset}")
     results = run_quality_checks(config, dataset=args.dataset, engine=engine)
 
@@ -109,9 +110,6 @@ def _dq(args: argparse.Namespace) -> int:
         print("\nQuarantine:")
         for name, count in quarantined.items():
             print(f"  {name}: inserted={count}")
-
-    # DQ failures are persisted and shown to the user. Do not make the CLI unusable
-    # for exploratory/operational runs simply because source data contains defects.
     return 0
 
 
@@ -133,6 +131,34 @@ def _schema_check(_: argparse.Namespace) -> int:
     return 0
 
 
+def _dbt(args: argparse.Namespace) -> int:
+    from citibike_pipeline.transform import run_dbt
+
+    return run_dbt((args.command,))
+
+
+def _transform(_: argparse.Namespace) -> int:
+    from citibike_pipeline.transform import load_fact_trips, run_dbt, sync_station_dimension
+    from citibike_pipeline.transform.core import warehouse_counts
+
+    engine = get_engine()
+
+    print("\n==> Synchronizing SCD2 station dimension")
+    station_result = sync_station_dimension(engine)
+    _print_result("silver.dim_station", station_result)
+
+    print("\n==> Loading valid SILVER trip fact")
+    fact_result = load_fact_trips(engine)
+    _print_result("silver.fact_trip", fact_result)
+
+    print("\n==> Running dbt build")
+    run_dbt(("build",))
+
+    print("\n==> Warehouse counts")
+    _print_result("warehouse", warehouse_counts(engine))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="citibike-pipeline")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -149,6 +175,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         help="Traffic bootstrap lookback when no watermark exists",
     )
+    ingest_parser.add_argument(
+        "--traffic-start-date",
+        help="Historical traffic backfill first date, YYYY-MM-DD",
+    )
+    ingest_parser.add_argument(
+        "--traffic-end-date",
+        help="Historical traffic backfill last date, YYYY-MM-DD (inclusive)",
+    )
     ingest_parser.set_defaults(handler=_ingest)
 
     wm_parser = sub.add_parser("watermarks", help="show incremental source watermarks")
@@ -157,15 +191,8 @@ def build_parser() -> argparse.ArgumentParser:
     health_parser = sub.add_parser("db-health", help="check PostgreSQL connectivity")
     health_parser.set_defaults(handler=_health)
 
-    dq_parser = sub.add_parser(
-        "dq",
-        help="run persisted PostgreSQL data-quality checks",
-    )
-    dq_parser.add_argument(
-        "--dataset",
-        choices=("all", *DQ_DATASETS),
-        default="all",
-    )
+    dq_parser = sub.add_parser("dq", help="run persisted PostgreSQL data-quality checks")
+    dq_parser.add_argument("--dataset", choices=("all", *DQ_DATASETS), default="all")
     dq_parser.add_argument(
         "--quarantine",
         action="store_true",
@@ -175,10 +202,23 @@ def build_parser() -> argparse.ArgumentParser:
     dq_parser.set_defaults(handler=_dq)
 
     schema_parser = sub.add_parser(
-        "schema-check",
-        help="register schemas and detect schema drift",
+        "schema-check", help="register schemas and detect schema drift"
     )
     schema_parser.set_defaults(handler=_schema_check)
+
+    dbt_parser = sub.add_parser("dbt", help="run repository-local dbt command")
+    dbt_parser.add_argument(
+        "--command",
+        choices=("debug", "run", "test", "build", "compile"),
+        default="build",
+    )
+    dbt_parser.set_defaults(handler=_dbt)
+
+    transform_parser = sub.add_parser(
+        "transform",
+        help="build SCD2 dimension, SILVER fact and dbt SILVER/GOLD marts",
+    )
+    transform_parser.set_defaults(handler=_transform)
 
     return parser
 

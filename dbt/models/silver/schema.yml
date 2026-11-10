@@ -1,0 +1,20 @@
+version: 2
+
+models:
+  - name: weather_hourly
+    description: Clean hourly weather used to enrich demand.
+    columns:
+      - name: observed_at
+        tests:
+          - not_null
+          - unique
+
+  - name: traffic_hourly
+    description: NYC DOT measurements aggregated to hour and borough.
+    columns:
+      - name: observed_hour
+        tests:
+          - not_null
+      - name: borough
+        tests:
+          - not_null
