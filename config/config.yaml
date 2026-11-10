@@ -11,6 +11,9 @@ database:
 
 http:
   timeout_seconds: 30
+  connect_timeout_seconds: 15
+  read_timeout_seconds: 30
+  download_read_timeout_seconds: 300
   retries: 4
   backoff_factor: 1.0
   user_agent: citibike-demand-forecasting/1.0
@@ -20,6 +23,7 @@ sources:
     base_url: https://s3.amazonaws.com/tripdata
     source_type: zip_csv
     incremental_unit: month
+    chunk_size: 20000
 
   citibike_gbfs:
     discovery_url: https://gbfs.citibikenyc.com/gbfs/gbfs.json
@@ -48,11 +52,31 @@ sources:
     url: https://data.cityofnewyork.us/resource/i4gi-tjb9.json
     source_type: socrata_json
     page_size: 5000
+    max_pages_per_run: 100
+    bootstrap_since_hours: 24
 
 quality:
   freshness_hours:
-    citibike_gbfs: 1
-    weather: 48
-    traffic: 48
+    citibike_trips: 1488
+    citibike_gbfs: 2
+    weather: 72
+    traffic: 12
   station_latitude_range: [40.0, 42.0]
   station_longitude_range: [-75.0, -72.0]
+
+modeling:
+  # The analytical mart still covers all stations. The forecasting experiment
+  # uses the busiest stations so training is reproducible on a student laptop.
+  top_stations: 250
+  validation_days: 4
+  test_days: 5
+
+  catboost:
+    iterations: 180
+    depth: 8
+    learning_rate: 0.08
+    l2_leaf_reg: 5.0
+    early_stopping_rounds: 30
+    random_seed: 42
+    thread_count: -1
+    verbose: 50

@@ -11,7 +11,22 @@ htmlcov/
 .idea/
 .vscode/
 
-data/raw/**/*.json
-data/quality/**/*.json
+# Large/raw data is reproducibly downloaded by the ingestion layer.
+data/raw/**
 !data/raw/.gitkeep
+data/quarantine/**
+!data/quarantine/.gitkeep
+data/quality/**
 !data/quality/.gitkeep
+
+# Generated dbt/Airflow state.
+dbt/target/
+dbt/logs/
+airflow/logs/
+
+# Trained models and experiment outputs are generated locally and persisted
+# to GOLD tables where appropriate; do not commit binary model artifacts.
+artifacts/models/**
+!artifacts/models/.gitkeep
+artifacts/metrics/**
+!artifacts/metrics/.gitkeep

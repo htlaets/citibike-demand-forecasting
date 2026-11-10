@@ -1,0 +1,15 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    tables:
+      - name: citibike_trips
+      - name: weather_hourly
+      - name: traffic_speed
+
+  - name: silver_existing
+    schema: silver
+    tables:
+      - name: dim_station
+      - name: fact_trip

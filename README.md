@@ -1,99 +1,409 @@
-# Мониторинг спроса на Citi Bike
+# Прогнозно-аналитическая система мониторинга спроса на Citi Bike
 
-Проект: прогнозно-аналитическая система по теме **«Мониторинг динамики спроса на прокат велосипедов в зависимости от погодных условий и дорожной ситуации в Нью-Йорке»**.
+Проект реализует полный цикл прогнозно-аналитической системы по теме:
 
-Система собирает оперативные данные о доступности велосипедов на станциях Citi Bike, погоде и скорости дорожного движения. Этот репозиторий содержит первый рабочий контур: ingestion, сохранение RAW-снимков и автоматические проверки качества данных.
+**«Мониторинг динамики спроса на прокат велосипедов в зависимости от погодных условий и дорожной ситуации в Нью-Йорке».**
+
+Система автоматически получает данные из нескольких внешних источников, сохраняет историю загрузок, контролирует качество и изменение схем данных, формирует аналитические слои PostgreSQL, рассчитывает прогноз спроса на уровне `станция × час` и предоставляет результаты через Apache Superset.
+
+## Основные возможности
+
+- инкрементальная загрузка данных из четырёх внешних источников;
+- идемпотентная запись и хранение watermark для каждого источника;
+- архитектура хранения `RAW → SILVER → GOLD`;
+- журналирование всех загрузок в `meta.etl_load_log`;
+- семь категорий контроля качества данных;
+- карантин некорректных записей;
+- контроль schema drift и ведение реестра схем;
+- SCD Type 2 для истории изменений станций;
+- трансформации и тесты dbt;
+- оркестрация ежедневного и ежемесячного процессов в Apache Airflow;
+- Seasonal Naive baseline и CatBoost для прогнозирования спроса;
+- временное разделение `train → validation → test` без перемешивания;
+- абляционный эксперимент по группам признаков;
+- сохранение метрик и прогнозов в GOLD-слое;
+- два русскоязычных дашборда Apache Superset;
+- автоматические тесты и GitHub Actions CI.
+
+## Архитектура
+
+```mermaid
+flowchart LR
+    CB[Citi Bike Trip Histories]
+    GBFS[Citi Bike GBFS]
+    W[Open-Meteo]
+    T[NYC DOT Traffic Speeds]
+
+    ING[Python ingestion]
+    RAW[(PostgreSQL RAW)]
+    DQ[Data Quality]
+    Q[(Quarantine)]
+    META[(META)]
+    SILVER[(PostgreSQL SILVER)]
+    DBT[dbt]
+    GOLD[(PostgreSQL GOLD)]
+    ML[Seasonal Naive + CatBoost]
+    AIR[Apache Airflow]
+    SUP[Apache Superset]
+
+    CB --> ING
+    GBFS --> ING
+    W --> ING
+    T --> ING
+
+    ING --> RAW
+    ING --> META
+    RAW --> DQ
+    DQ --> Q
+    DQ --> SILVER
+    DQ --> META
+    SILVER --> DBT
+    DBT --> GOLD
+    GOLD --> ML
+    ML --> GOLD
+    GOLD --> SUP
+    META --> SUP
+
+    AIR -. оркестрация .-> ING
+    AIR -. оркестрация .-> DQ
+    AIR -. оркестрация .-> DBT
+```
+
+Подробное описание приведено в [docs/architecture.md](docs/architecture.md).
 
 ## Источники данных
 
-| Источник | Что загружается | Назначение |
-|---|---|---|
-| [Citi Bike GBFS](https://citibikenyc.com/system-data) | станции, число доступных велосипедов и доков | оценка текущего спроса и доступности |
-| [Open-Meteo](https://open-meteo.com/en/docs) | температура, осадки, ветер, влажность и погодный код | анализ влияния погодных условий |
-| [NYC DOT Traffic Speeds](https://data.cityofnewyork.us/Transportation/Real-Time-Traffic-Speed-Data/i4gi-tjb9) | скорость и время проезда по дорожным сегментам | анализ дорожной ситуации |
+| Источник | Формат | Используемые данные | Назначение |
+|---|---|---|---|
+| [Citi Bike Trip Histories](https://citibikenyc.com/system-data) | ZIP/CSV | начало и конец поездки, станции, координаты, тип велосипеда, тип пользователя | основной источник исторического спроса |
+| [Citi Bike GBFS](https://gbfs.citibikenyc.com/gbfs/gbfs.json) | REST/JSON | сведения о станциях, доступные велосипеды и доки | оперативное состояние станций |
+| [Open-Meteo](https://open-meteo.com/) | REST/JSON | температура, влажность, осадки, снег, ветер | оценка влияния погоды |
+| [NYC DOT Traffic Speeds](https://data.cityofnewyork.us/Transportation/Real-Time-Traffic-Speed-Data/i4gi-tjb9) | Socrata REST/JSON | скорость движения и время проезда | оценка дорожной ситуации |
+
+Целевая переменная — **`rides_started`**, количество поездок, начавшихся на конкретной станции в течение часа.
+
+## Стек технологий
+
+| Компонент | Технология |
+|---|---|
+| Язык | Python 3.11+ |
+| Хранилище | PostgreSQL 16 |
+| Работа с данными | pandas, SQLAlchemy |
+| Трансформации | dbt-postgres |
+| Оркестрация | Apache Airflow 3.4 |
+| Прогнозирование | CatBoost, NumPy |
+| BI | Apache Superset 6 |
+| Контейнеризация | Docker Compose |
+| Тестирование | pytest, Ruff |
+| CI | GitHub Actions |
+
+## Слои данных
+
+В PostgreSQL используются пять логических схем.
+
+| Схема | Назначение |
+|---|---|
+| `raw` | исходные записи с минимальными преобразованиями |
+| `silver` | очищенные и согласованные сущности |
+| `gold` | аналитические витрины, прогнозы и представления мониторинга |
+| `meta` | журнал загрузок, watermark, DQ, schema registry и lineage |
+| `quarantine` | некорректные записи с причиной отклонения |
+
+Основная аналитическая витрина — `gold.station_hourly_demand`. Её зерно: **одна строка на `(observed_hour, station_sk)`**.
+
+## Контроль качества данных
+
+Система реализует все семь категорий контроля:
+
+1. полнота;
+2. уникальность;
+3. корректность;
+4. типы данных;
+5. допустимые диапазоны;
+6. ссылочная целостность;
+7. актуальность.
+
+Результаты сохраняются в `meta.dq_results`. Некорректные записи не удаляются из RAW: они дополнительно помещаются в `quarantine.rejected_records`, что сохраняет возможность аудита.
+
+Проверка:
+
+```powershell
+citibike-pipeline dq --dataset all --quarantine
+citibike-pipeline schema-check
+```
+
+Подробнее: [docs/data_quality.md](docs/data_quality.md).
+
+## Преобразование данных
+
+`silver.dim_station` реализует SCD Type 2 и хранит историю изменений станции через:
+
+- `valid_from`;
+- `valid_to`;
+- `is_current`;
+- `record_hash`.
+
+`silver.fact_trip` содержит только допустимые поездки.
+
+dbt формирует промежуточные модели и итоговую почасовую витрину спроса:
 
 ```text
-Citi Bike GBFS ─────┐
-Open-Meteo ─────────┼──> ingestion CLI ──> data/raw ──> data/quality
-NYC DOT Traffic ────┘
+RAW
+ ├─ Citi Bike trips
+ ├─ Weather
+ └─ Traffic
+       ↓
+STAGING
+       ↓
+SILVER
+       ↓
+GOLD: station_hourly_demand
 ```
 
-## Что уже реализовано
+Запуск:
 
-- конфигурация источников в YAML;
-- HTTP-клиент с таймаутами, повторными попытками и понятными ошибками;
-- загрузчики Citi Bike, Open-Meteo и NYC DOT Traffic;
-- сохранение атомарных JSON-снимков с UTC-временем загрузки;
-- проверки наличия строк и полей, NULL, дубликатов, типов, диапазонов и временного диапазона;
-- CLI для загрузки всех или одного источника и повторной проверки сохранённого файла;
-- PostgreSQL DDL для метаданных запусков и результатов проверок;
-- unit-тесты и GitHub Actions CI.
+```powershell
+citibike-pipeline transform
+```
 
-## Быстрый старт
+Подробнее: [docs/transformation.md](docs/transformation.md).
 
-Требуется Python 3.10 или новее.
+## Прогнозирование
 
-```bash
+Перед обучением строится полная сетка `станция × час`, включая часы с нулевым спросом. Исторические признаки рассчитываются без утечки целевой переменной:
+
+- `lag_1`;
+- `lag_24`;
+- `lag_168`;
+- rolling mean 3/24/168 часов с предварительным `shift(1)`;
+- календарные признаки;
+- погодные признаки;
+- показатели дорожной ситуации.
+
+Используются две группы моделей:
+
+- **Seasonal Naive**: спрос в тот же час предыдущей недели;
+- **CatBoost**: глобальная модель для нескольких станций.
+
+Для выбора признаков выполняется абляционный эксперимент:
+
+```text
+history
+  ↓
++ calendar
+  ↓
++ weather
+  ↓
++ traffic
+```
+
+Итоговый набор выбирается по минимальному WAPE на validation-части.
+
+### Итоговые результаты
+
+| Модель | Выборка | MAE | RMSE | WAPE |
+|---|---|---:|---:|---:|
+| Seasonal Naive 168h | test | 5.505 | 8.610 | 69.92% |
+| CatBoost | test | **2.751** | **4.309** | **34.94%** |
+
+Лучший набор признаков на validation — **история + календарные + погодные + дорожные признаки** (`traffic`), WAPE = **28.15%**.
+
+Эксперимент выполнялся для 250 наиболее активных станций: 87 500 строк train, 24 000 validation и 30 000 test.
+
+Подробнее: [docs/modeling.md](docs/modeling.md) и [docs/results.md](docs/results.md).
+
+## Оркестрация Airflow
+
+Реализованы два DAG:
+
+- `citibike_daily_pipeline` — ежедневная загрузка GBFS, погоды и дорожной ситуации, DQ, schema drift и обновление dbt-витрин;
+- `citibike_monthly_trips` — загрузка следующего месячного архива поездок, DQ, SCD2, SILVER fact и dbt.
+
+Запуск:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\airflow_start.ps1
+```
+
+Интерфейс:
+
+```text
+http://localhost:8080
+```
+
+Проверка:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\airflow_check.ps1
+```
+
+Подробнее: [docs/airflow.md](docs/airflow.md).
+
+## Дашборды Apache Superset
+
+Запуск:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\superset_start.ps1
+```
+
+Интерфейс:
+
+```text
+http://localhost:8088
+```
+
+Создаются два дашборда:
+
+**Citi Bike — Спрос и прогноз**
+- фактический спрос и прогноз CatBoost;
+- WAPE итоговой модели;
+- наиболее востребованные станции;
+- динамика спроса и дорожной ситуации;
+- сравнение качества моделей.
+
+**Citi Bike — Мониторинг платформы данных**
+- успешные и неуспешные загрузки;
+- объёмы загруженных данных;
+- длительность загрузок;
+- результаты DQ;
+- журнал последних запусков.
+
+Проверка:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\superset_check.ps1
+```
+
+Подробнее: [docs/superset.md](docs/superset.md).
+
+## Быстрый запуск на Windows
+
+### 1. Подготовка окружения
+
+```powershell
 python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-cp .env.example .env
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -e ".[dev,transform,ml]"
+Copy-Item .env.example .env
 ```
 
-Токен NYC Open Data необязателен для небольших запросов, но повышает лимиты API. Если он есть, экспортируйте значение из `.env`:
+Если порт PostgreSQL `5432` на компьютере занят, укажите в `.env`, например:
 
-```bash
-set -a; source .env; set +a
+```text
+POSTGRES_PORT=5433
+DATABASE_URL=postgresql+psycopg://citibike:citibike@127.0.0.1:5433/citibike
 ```
 
-Загрузить все три источника и сразу выполнить проверки качества:
+### 2. PostgreSQL
 
-```bash
-citibike-pipeline ingest --source all
+```powershell
+docker compose up -d postgres
+citibike-pipeline db-health
 ```
 
-Загрузить один источник:
+### 3. Загрузка данных
 
-```bash
-citibike-pipeline ingest --source weather
+Пример исторического периода:
+
+```powershell
+citibike-pipeline ingest --source citibike_trips --start-month 2026-09 --end-month 2026-09
+citibike-pipeline ingest --source weather --start-date 2026-09-01 --end-date 2026-09-30
+citibike-pipeline ingest --source traffic --traffic-start-date 2026-09-01 --traffic-end-date 2026-09-30
+citibike-pipeline ingest --source citibike_gbfs
 ```
 
-Повторно проверить сохранённый RAW-файл:
+### 4. DQ и преобразования
 
-```bash
-citibike-pipeline quality data/raw/weather/<имя-файла>.json --source weather
+```powershell
+citibike-pipeline dq --dataset all --quarantine
+citibike-pipeline schema-check
+citibike-pipeline transform
 ```
 
-Путь к конфигурации можно задать флагом `--config` или переменной `PIPELINE_CONFIG`. Каталог назначения переопределяется через `--output-dir`.
+### 5. Модель
 
-## Структура
+Быстрая проверка:
+
+```powershell
+citibike-pipeline train --smoke
+```
+
+Полный эксперимент:
+
+```powershell
+citibike-pipeline train
+citibike-pipeline model-metrics
+```
+
+### 6. Airflow и Superset
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\airflow_start.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\superset_start.ps1
+```
+
+Полная последовательность запуска и диагностики приведена в [docs/runbook.md](docs/runbook.md).
+
+## Финальная проверка проекта
+
+При запущенных контейнерах:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\final_check.ps1
+```
+
+Скрипт проверяет:
+
+- Python и зависимости;
+- Ruff;
+- pytest;
+- доступность PostgreSQL;
+- dbt tests;
+- наличие витрин и прогнозов;
+- сохранённые метрики моделей;
+- Airflow;
+- Superset.
+
+## Структура репозитория
 
 ```text
 .
-├── config/config.yaml
-├── data/
-│   ├── raw/                 # JSON-снимки источников (не коммитятся)
-│   └── quality/             # JSON-отчёты проверок (не коммитятся)
-├── sql/init_metadata.sql
+├── .github/workflows/        # CI
+├── airflow/dags/             # DAG Airflow
+├── config/                   # конфигурация проекта
+├── data/                     # локальные RAW/quarantine данные, не коммитятся
+├── dbt/                      # dbt project
+├── docker/                   # Dockerfile для Airflow и Superset
+├── docs/                     # техническая документация
+├── scripts/                  # запуск и проверки сервисов
+├── sql/init/                 # инициализация PostgreSQL
 ├── src/citibike_pipeline/
-│   ├── ingestion/           # загрузчики трёх API
-│   ├── quality/             # правила и отчёты качества
-│   ├── cli.py
-│   ├── config.py
-│   ├── http.py
-│   └── storage.py
-└── tests/test_quality.py
+│   ├── database/
+│   ├── ingestion/
+│   ├── ml/
+│   ├── quality/
+│   └── transform/
+├── superset/                 # bootstrap дашбордов
+├── tests/                    # автоматические тесты
+├── docker-compose.yml
+├── docker-compose.airflow.yml
+├── docker-compose.superset.yml
+├── pyproject.toml
+└── README.md
 ```
 
-## Проверки для разработки
+## Документация
 
-```bash
-make lint
-make test
-```
-
-Команда `make ingest` запускает полный ingestion. CI выполняет линтер и тесты на Python 3.10 и 3.12; сетевые API в unit-тестах не вызываются.
-
-## Следующие этапы
-
-После стабилизации ingestion: загрузка Bronze/Silver/Gold в PostgreSQL, исторические поездки Citi Bike, оркестрация, витрины по станциям и часам, модель прогноза спроса и дашборд мониторинга.
+- [Архитектура](docs/architecture.md)
+- [Загрузка данных](docs/ingestion.md)
+- [Архитектура БД](docs/database.md)
+- [Контроль качества](docs/data_quality.md)
+- [RAW → SILVER → GOLD](docs/transformation.md)
+- [Оркестрация Airflow](docs/airflow.md)
+- [Прогнозирование](docs/modeling.md)
+- [Результаты эксперимента](docs/results.md)
+- [Data lineage](docs/lineage.md)
+- [Apache Superset](docs/superset.md)
+- [Инструкция запуска и диагностики](docs/runbook.md)
