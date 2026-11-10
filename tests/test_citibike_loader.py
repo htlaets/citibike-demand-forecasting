@@ -1,6 +1,6 @@
+import zipfile
 from datetime import date
 from pathlib import Path
-import zipfile
 
 from citibike_pipeline.ingestion.citibike_trips import (
     _valid_zip,

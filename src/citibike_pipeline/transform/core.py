@@ -13,7 +13,6 @@ from sqlalchemy import Engine, text
 
 from citibike_pipeline.database.connection import get_engine
 
-
 STATION_CANDIDATES_SQL = """
 CREATE TEMP TABLE tmp_station_candidates ON COMMIT DROP AS
 WITH trip_start AS (

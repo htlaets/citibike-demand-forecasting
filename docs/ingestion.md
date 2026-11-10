@@ -1,31 +1,86 @@
-# Ingestion architecture
+# Загрузка данных
 
-The ingestion layer implements four source pipelines:
+В проекте реализованы четыре независимых контура ingestion.
 
-1. **Citi Bike Trip Histories** — monthly ZIP/CSV archives. `ride_id` is the
-   idempotency key and the monthly watermark is stored in `meta.etl_watermark`.
-2. **Citi Bike GBFS** — station information and station status REST/JSON feeds.
-   Feed timestamps make snapshot inserts idempotent.
-3. **Open-Meteo Historical Weather** — hourly REST/JSON data. `observed_at` is
-   the idempotency key and the completed date is the watermark.
-4. **NYC DOT Traffic Speeds** — paginated Socrata REST/JSON data.
-   `(link_id, data_as_of)` is the idempotency key; the latest timestamp is the
-   watermark.
+## Citi Bike Trip Histories
 
-Every source writes one record per attempt to `meta.etl_load_log`. A watermark
-is advanced only after the database transaction has succeeded. HTTP requests
-use timeouts, retry/backoff and explicit handling for rate-limit/server errors.
+Источник публикует месячные ZIP/CSV-архивы исторических поездок.
 
-## Smoke-test commands
+Ключ идемпотентности: `ride_id`.
+
+Watermark: последний обработанный месяц.
+
+Пример:
+
+```powershell
+citibike-pipeline ingest --source citibike_trips --start-month 2026-09 --end-month 2026-09
+```
+
+## Citi Bike GBFS
+
+Используются оперативные REST/JSON feeds:
+
+- station information;
+- station status.
+
+Ключ: `(station_id, observed_at)`.
 
 ```powershell
 citibike-pipeline ingest --source citibike_gbfs
-citibike-pipeline ingest --source weather --start-date 2026-09-01 --end-date 2026-09-02
-citibike-pipeline ingest --source traffic --traffic-since-hours 1
-citibike-pipeline ingest --source citibike_trips --start-month 2026-09 --end-month 2026-09
-citibike-pipeline watermarks
 ```
 
-Running the same commands again should not create duplicate business records.
-The second run still creates a new load-log entry, which is intentional because
-the journal records every execution attempt.
+## Open-Meteo
+
+Загружаются почасовые:
+
+- температура;
+- относительная влажность;
+- осадки;
+- дождь;
+- снег;
+- погодный код;
+- скорость ветра.
+
+Ключ: `observed_at`.
+
+```powershell
+citibike-pipeline ingest --source weather --start-date 2026-09-01 --end-date 2026-09-30
+```
+
+## NYC DOT Traffic Speeds
+
+Источник доступен через Socrata REST API.
+
+Используются:
+
+- link ID;
+- время наблюдения;
+- скорость;
+- время проезда;
+- borough;
+- название дорожного сегмента.
+
+Ключ: `(link_id, data_as_of)`.
+
+Историческая загрузка:
+
+```powershell
+citibike-pipeline ingest --source traffic --traffic-start-date 2026-09-01 --traffic-end-date 2026-09-30
+```
+
+## Надёжность
+
+HTTP-клиент использует:
+
+- connect/read timeout;
+- retry;
+- backoff;
+- явную обработку ошибок источника.
+
+Watermark изменяется только после успешной транзакции.
+
+Каждая попытка фиксируется в `meta.etl_load_log` с количеством полученных, вставленных, обновлённых и отклонённых строк.
+
+## Проверка идемпотентности
+
+Повторная загрузка того же периода должна дать `inserted=0` для уже существующих бизнес-записей. Это ожидаемое поведение.

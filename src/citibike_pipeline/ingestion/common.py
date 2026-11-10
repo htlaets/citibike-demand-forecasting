@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from collections.abc import Iterable
+from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import pandas as pd
 from sqlalchemy import Connection, text
 
 
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def parse_month(value: str) -> date:

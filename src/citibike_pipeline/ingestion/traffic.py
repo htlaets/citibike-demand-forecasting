@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 from collections import defaultdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -50,7 +50,7 @@ def _parse_socrata_time(value: str) -> datetime:
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=NYC_TZ)
-    return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(UTC)
 
 
 def _number(value: Any) -> float | None:
@@ -162,7 +162,7 @@ def _materialize_buckets(
         result.append(
             {
                 "link_id": f"HIST_HOURLY:{borough}",
-                "data_as_of": local_hour.astimezone(timezone.utc),
+                "data_as_of": local_hour.astimezone(UTC),
                 "speed": speed_sum / speed_count if speed_count else None,
                 "travel_time": travel_sum / travel_count if travel_count else None,
                 "borough": borough,
@@ -179,8 +179,8 @@ def _historical_day_is_complete(engine: Engine, day: date) -> bool:
     """Return True when all 24 local hours and at least five borough buckets exist."""
     start_local = datetime.combine(day, datetime.min.time(), tzinfo=NYC_TZ)
     end_local = start_local + timedelta(days=1)
-    start_utc = start_local.astimezone(timezone.utc)
-    end_utc = end_local.astimezone(timezone.utc)
+    start_utc = start_local.astimezone(UTC)
+    end_utc = end_local.astimezone(UTC)
 
     from sqlalchemy import text as sql_text
 

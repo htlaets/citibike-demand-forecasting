@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from sqlalchemy import Engine, text
 
 from citibike_pipeline.database.connection import get_engine
-
 
 QUERIES: dict[str, list[tuple[str, str]]] = {
     "citibike_trips": [

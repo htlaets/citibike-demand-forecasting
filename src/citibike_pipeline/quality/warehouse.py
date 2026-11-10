@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from sqlalchemy import Engine, text
 
@@ -214,7 +215,10 @@ def _citibike_checks(engine: Engine, cfg: dict[str, Any]) -> list[DQResult]:
                    OR start_station_id IS NULL
                    OR btrim(start_station_id) = ''
             """,
-            details="Rows without a start station or timestamps cannot be used in station-hour demand.",
+            details=(
+                "Rows without a start station or timestamps cannot be used "
+                "in station-hour demand."
+            ),
         ),
         _simple_count_check(
             engine,

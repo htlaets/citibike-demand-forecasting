@@ -1,4 +1,4 @@
-from datetime import timezone
+from datetime import UTC
 
 from citibike_pipeline.ingestion.traffic import (
     _parse_socrata_time,
@@ -18,7 +18,7 @@ class FakeClient:
 
 def test_parse_naive_socrata_timestamp_as_new_york_time() -> None:
     value = _parse_socrata_time("2026-09-01T12:00:00.000")
-    assert value.tzinfo == timezone.utc
+    assert value.tzinfo == UTC
     assert value.isoformat() == "2026-09-01T16:00:00+00:00"
 
 

@@ -1,13 +1,15 @@
-.PHONY: install lint test db-up db-down db-health ingest-smoke watermarks
+.PHONY: install lint test check db-up db-down db-health dbt-debug dbt-test ml-smoke watermarks
 
 install:
-	python -m pip install -e ".[dev]"
+	python -m pip install -e ".[dev,transform,ml]"
 
 lint:
 	python -m ruff check src tests
 
 test:
 	python -m pytest
+
+check: lint test
 
 db-up:
 	docker compose up -d postgres
@@ -16,12 +18,16 @@ db-down:
 	docker compose down
 
 db-health:
-	python -m citibike_pipeline.database.healthcheck
+	citibike-pipeline db-health
 
-ingest-smoke:
-	citibike-pipeline ingest --source citibike_gbfs
-	citibike-pipeline ingest --source weather --start-date 2026-09-01 --end-date 2026-09-02
-	citibike-pipeline ingest --source traffic --traffic-since-hours 1
+dbt-debug:
+	citibike-pipeline dbt --command debug
+
+dbt-test:
+	citibike-pipeline dbt --command test
+
+ml-smoke:
+	citibike-pipeline train --smoke
 
 watermarks:
 	citibike-pipeline watermarks

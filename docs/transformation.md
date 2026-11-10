@@ -1,35 +1,37 @@
-# Transformation layer: RAW -> SILVER -> GOLD
+# Преобразование RAW → SILVER → GOLD
 
-## Purpose
+## Назначение
 
-The transformation layer keeps source data unchanged in RAW, excludes records
-that cannot safely participate in analytics, resolves stations through an SCD
-Type 2 dimension, and produces the station-hour demand mart used by forecasting
-and Apache Superset.
+Трансформационный слой:
+
+- сохраняет исходные данные в RAW;
+- исключает записи, которые нельзя безопасно использовать в аналитике;
+- согласует справочник станций;
+- формирует факты поездок;
+- строит почасовую витрину спроса.
 
 ## SCD Type 2
 
-`silver.dim_station` uses:
+`silver.dim_station` хранит версии станции.
 
-- `station_sk` — surrogate key;
-- `station_id` — natural source key;
-- `valid_from` / `valid_to`;
-- `is_current`;
-- `record_hash`.
+Изменение атрибутов определяется по `record_hash`. Если состояние изменилось:
 
-The transformation selects the latest known station state. A changed hash closes
-the previous current version and inserts a new one. Re-running against the same
-source state inserts zero new versions.
+1. текущая версия закрывается;
+2. устанавливается `valid_to`;
+3. `is_current` становится `false`;
+4. создаётся новая версия.
 
-## Fact
+При повторном запуске на неизменившихся данных новые версии не появляются.
 
-`silver.fact_trip` contains valid trips only. Rows with missing station/time,
-invalid duration, or quarantined defects are excluded. `ride_id` remains the
-idempotency key.
+## Факт поездок
+
+`silver.fact_trip` содержит валидные поездки. Записи с отсутствующим стартом/временем, недопустимой длительностью или карантинными нарушениями исключаются.
+
+Идемпотентность сохраняется по `ride_id`.
 
 ## dbt
 
-dbt creates:
+dbt формирует:
 
 - `staging.stg_citibike_trips`;
 - `staging.stg_weather_hourly`;
@@ -38,31 +40,20 @@ dbt creates:
 - `silver.traffic_hourly`;
 - `gold.station_hourly_demand`.
 
-The GOLD grain is exactly one row per `(observed_hour, station_sk)`.
+Зерно GOLD-витрины:
 
-Calendar features use `America/New_York`, while warehouse timestamps remain
-timezone-aware.
-
-## Run
-
-Install transformation dependencies:
-
-```bash
-pip install -e ".[dev,transform]"
+```text
+(observed_hour, station_sk)
 ```
 
-Validate dbt:
+Время календарных признаков рассчитывается в `America/New_York`, а timestamp в хранилище остаются timezone-aware.
 
-```bash
+## Запуск
+
+```powershell
+pip install -e ".[dev,transform,ml]"
 citibike-pipeline dbt --command debug
-```
-
-Build the complete transformation layer:
-
-```bash
 citibike-pipeline transform
 ```
 
-Re-running the command is expected and safe. Facts and dbt incremental models
-use stable unique keys, while SCD2 creates a version only if station attributes
-change.
+Повторный запуск безопасен: факты и incremental dbt-модели используют стабильные уникальные ключи.

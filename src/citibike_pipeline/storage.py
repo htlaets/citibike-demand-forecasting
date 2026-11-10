@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 
 def utc_now() -> datetime:
     """Return an aware UTC timestamp."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def build_snapshot(source: str, payload: Any, fetched_at: datetime | None = None) -> dict[str, Any]:

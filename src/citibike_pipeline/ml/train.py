@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -144,7 +144,7 @@ def train_forecasting_pipeline(
         f"traffic={modeling.coverage['traffic_percent']:.2f}%"
     )
 
-    trained_at = datetime.now(timezone.utc)
+    trained_at = datetime.now(UTC)
     model_version = trained_at.strftime("%Y%m%dT%H%M%SZ")
 
     # Seasonal naive: same station and same hour one week earlier.

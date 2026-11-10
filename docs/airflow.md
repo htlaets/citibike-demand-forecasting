@@ -1,16 +1,12 @@
-# Apache Airflow orchestration
+# Оркестрация Apache Airflow
 
-The project uses Apache Airflow 3.4 with LocalExecutor inside Linux containers.
-Airflow metadata is isolated in its own PostgreSQL service (`airflow-db`);
-business data remains in the existing `citibike-postgres` service.
+Проект использует Apache Airflow 3.4 с LocalExecutor в Docker.
 
-## DAGs
+Метаданные Airflow хранятся отдельно в `airflow-db`. Предметные данные остаются в `citibike-postgres`.
 
-### `citibike_daily_pipeline`
+## DAG `citibike_daily_pipeline`
 
-Schedule: `06:15 America/New_York`, daily.
-
-Flow:
+Расписание: ежедневно в `06:15 America/New_York`.
 
 ```text
 database_health
@@ -28,13 +24,11 @@ database_health
                  build_incremental_marts
 ```
 
-The daily DAG intentionally does **not** rebuild `silver.fact_trip`; that table
-contains millions of rows and changes only when a new monthly Citi Bike trip
-archive arrives.
+Ежедневный DAG не перестраивает многомиллионный `silver.fact_trip`, поскольку архив поездок обновляется помесячно.
 
-### `citibike_monthly_trips`
+## DAG `citibike_monthly_trips`
 
-Schedule: 05:00 America/New_York on the 7th of each month.
+Расписание: 7-го числа каждого месяца в 05:00.
 
 ```text
 database_health
@@ -46,58 +40,49 @@ validate_trip_data
 schema_drift_guard
       |
 rebuild_trip_models
-  - SCD2 station sync
-  - incremental fact load
-  - dbt build
+      |
+SCD2 + fact + dbt
 ```
 
-Both DAGs use `catchup=False`, `max_active_runs=1`, retries and retry delays.
+Для обоих DAG настроены:
 
-## Start on Windows / Docker Desktop
+- `catchup=False`;
+- `max_active_runs=1`;
+- retries;
+- retry delay.
 
-Airflow itself runs inside Linux containers; do not install it into the Windows
-project virtual environment.
+## Запуск
 
 ```powershell
-.\scripts\airflow_start.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\airflow_start.ps1
 ```
 
-Then open:
+UI:
 
 ```text
 http://localhost:8080
 ```
 
-User: `admin`.
+Пользователь: `admin`.
 
-The SimpleAuthManager generates the password on first API-server startup. Read it:
+Получить сгенерированный пароль:
 
 ```powershell
 docker compose -f docker-compose.yml -f docker-compose.airflow.yml exec airflow-api-server cat /opt/airflow/simple_auth_manager_passwords.json.generated
 ```
 
-## Smoke test
+## Проверка
 
 ```powershell
-.\scripts\airflow_check.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\airflow_check.ps1
 ```
 
-Expected:
-- Airflow version 3.4.0;
-- both project DAG IDs are listed;
-- no DAG import errors;
-- project PostgreSQL health check succeeds;
-- dbt debug succeeds.
+Проверяются:
 
-DAGs are paused at creation deliberately. For the first demonstration, trigger
-`citibike_daily_pipeline` manually in the UI. Leave the monthly DAG paused until
-you actually want to download the next large Citi Bike monthly archive.
+- версия Airflow;
+- оба DAG;
+- отсутствие import errors;
+- доступность проектной БД из scheduler;
+- `dbt debug`.
 
-## Stop
-
-```powershell
-.\scripts\airflow_stop.ps1
-```
-
-The metadata DB and Airflow home use named Docker volumes, so stopping containers
-does not delete metadata, task history, logs, or the generated admin password.
+Для демонстрации достаточно вручную запустить `citibike_daily_pipeline`. Ежемесячный DAG рекомендуется не запускать без необходимости, поскольку он загружает крупный архив поездок.

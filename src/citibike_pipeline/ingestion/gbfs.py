@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import Engine
@@ -61,13 +61,13 @@ def _feed_timestamp(payload: dict[str, Any]) -> datetime:
     try:
         # GBFS v2 commonly uses epoch seconds.
         if isinstance(value, (int, float)):
-            return datetime.fromtimestamp(value, tz=timezone.utc)
+            return datetime.fromtimestamp(value, tz=UTC)
         if isinstance(value, str):
-            return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
     except (ValueError, OSError):
         pass
     # Round fallback to minute so immediate reruns remain idempotent.
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return now.replace(second=0, microsecond=0)
 
 

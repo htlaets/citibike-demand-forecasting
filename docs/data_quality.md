@@ -1,46 +1,53 @@
-# Data quality, quarantine and schema management
+# Контроль качества данных, карантин и schema drift
 
-The project implements every data-quality category required by the course methodology.
+## Категории DQ
 
-| Type | Example |
+Проект реализует семь категорий контроля качества.
+
+| Категория | Пример |
 |---|---|
-| Completeness | required timestamps, station IDs, weather and traffic measures |
-| Uniqueness | `ride_id`, weather timestamp, `(link_id, data_as_of)` |
-| Validity | positive, plausible trip duration; non-negative GBFS availability |
-| Type | PostgreSQL physical types of analytics-critical Citi Bike columns |
-| Range | coordinates, weather measures, traffic speed/travel time |
-| Referential integrity | GBFS station status resolves to station information |
-| Freshness | source-specific SLA against latest RAW event |
+| Полнота | обязательные timestamp и идентификаторы станций |
+| Уникальность | `ride_id`, timestamp погоды, составные ключи traffic |
+| Корректность | допустимая длительность поездки |
+| Типы данных | физические типы аналитически важных столбцов |
+| Диапазоны | координаты, погодные показатели, скорость движения |
+| Ссылочная целостность | соответствие GBFS status справочнику станций |
+| Актуальность | SLA по максимальному времени события |
 
-Every execution writes its results to `meta.dq_results`.
+Запуск:
 
-## Bad-data behavior
-
-RAW is immutable from the DQ perspective. Records that cannot safely participate in
-downstream analytics are copied to `quarantine.rejected_records` with:
-
-- source and dataset;
-- natural key;
-- rejection reason;
-- failed check categories;
-- a JSON representation of the relevant source values;
-- rejection timestamp.
-
-The original RAW record remains available for auditability.
-
-Run:
-
-```bash
+```powershell
 citibike-pipeline dq --dataset all --quarantine
 ```
 
+Результаты сохраняются в `meta.dq_results`.
+
+## Поведение при ошибках
+
+RAW-слой не изменяется DQ-процессом. Некорректные записи копируются в `quarantine.rejected_records`.
+
+Такой подход позволяет:
+
+- исключить плохие записи из аналитики;
+- не потерять исходную информацию;
+- объяснить причину исключения;
+- повторно проверить данные после изменения правил.
+
+На проверенном наборе Citi Bike были обнаружены реальные дефекты исходного источника: отсутствующие данные о старте и некорректная длительность отдельных поездок. Они исключаются из `silver.fact_trip`.
+
 ## Schema drift
 
-`citibike-pipeline schema-check` snapshots the physical schema of managed RAW tables.
+Команда:
 
-The first run registers version 1 in `meta.schema_registry`. Later runs compare the
-current schema with the registered version. Additive changes are recorded as compatible.
-Removed columns or type/nullability changes are marked as breaking and written to
-`meta.schema_changes`.
+```powershell
+citibike-pipeline schema-check
+```
 
-This provides explicit schema-evolution history instead of silently accepting drift.
+сравнивает физическую схему управляемых RAW-таблиц с зарегистрированной версией.
+
+Используются:
+
+- `meta.schema_registry` — версии схем;
+- `meta.schema_changes` — журнал изменений.
+
+Добавление совместимого поля фиксируется как изменение. Удаление поля, изменение типа или критичной nullability может быть отмечено как breaking change.

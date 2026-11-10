@@ -1,112 +1,109 @@
-# Demand forecasting
+# Прогнозирование спроса
 
-## Target and grain
+## Целевая переменная и зерно
 
-The target is `rides_started`: the number of rides starting at a station during
-one hour.
+Целевая переменная — `rides_started`, число поездок, начавшихся на станции за один час.
 
-The GOLD analytical mart is preserved for all stations. The default modeling
-experiment uses the 250 busiest stations so the full experiment is reproducible
-on a normal student laptop.
+Для модели строится полная сетка:
 
-A complete `station × hour` grid is created before training. Missing demand
-rows become explicit zero-demand observations. This avoids selection bias that
-would occur if the model learned only from hours in which at least one trip
-existed.
+```text
+station × hour
+```
 
-## Leakage control
+Если в GOLD отсутствует строка для часа без поездок, спрос в такой точке заполняется нулём. Это исключает смещение выборки в сторону часов с ненулевой активностью.
 
-Historical features are calculated separately per station:
+По умолчанию полный эксперимент использует 250 наиболее активных станций.
+
+## Защита от leakage
+
+Исторические признаки считаются отдельно для каждой станции:
 
 - `lag_1`;
 - `lag_24`;
 - `lag_168`;
-- shifted rolling mean over 3 hours;
-- shifted rolling mean over 24 hours;
-- shifted rolling mean over 168 hours.
+- rolling mean 3 часа;
+- rolling mean 24 часа;
+- rolling mean 168 часов.
 
-Every rolling statistic is shifted by one hour first. Therefore the target of
-the current row never participates in its own feature vector.
+Перед rolling применяется `shift(1)`, поэтому текущее значение целевой переменной не участвует в признаках своей же строки.
 
-The first 168 hours are removed so Seasonal Naive and CatBoost are evaluated on
-exactly the same rows.
+Первые 168 часов исключаются для корректного сравнения с недельным baseline.
 
-## Time split
+## Временное разделение
 
-No random shuffle is used.
+Shuffle не используется.
 
-Default split for a one-month dataset:
+Для одномесячного набора:
 
-- training — oldest observations;
-- validation — 4 days immediately before the test set;
-- test — final 5 days.
+- train — наиболее ранняя часть истории;
+- validation — 4 дня перед тестом;
+- test — последние 5 дней.
 
-This is a rolling one-hour-ahead evaluation: when forecasting hour `t`, actual
-demand through `t-1` is assumed to be available.
+Это соответствует rolling one-hour-ahead оценке: при прогнозе часа `t` известен фактический спрос не позднее `t-1`.
 
-## Models
+## Seasonal Naive
 
-### Seasonal Naive
+Базовая модель:
 
-`prediction(t) = rides_started(t - 168h)`.
-
-This is the mandatory interpretable baseline for weekly seasonality.
-
-### CatBoost
-
-A global CatBoost regressor is trained across multiple stations. `station_id`
-is handled as a categorical feature.
-
-Ablation is run in four stages:
-
-1. `history` — station ID, lags and rolling averages;
-2. `calendar` — history + calendar/cyclical features;
-3. `weather` — calendar + weather;
-4. `traffic` — weather + road-traffic conditions.
-
-The feature set with the lowest validation WAPE (RMSE as tie-breaker) is selected.
-It is then refit on `train + validation` and evaluated exactly once on the test
-period.
-
-## Metrics
-
-The project persists:
-
-- MAE;
-- RMSE;
-- WAPE.
-
-Metrics are written to `gold.model_metrics`.
-
-Test predictions for Seasonal Naive and the selected CatBoost model are written
-to `gold.forecast_results`, enabling direct actual-vs-forecast comparison in
-Apache Superset.
-
-## Commands
-
-Install ML dependencies:
-
-```powershell
-pip install -e ".[dev,transform,ml]"
+```text
+prediction(t) = rides_started(t - 168 часов)
 ```
 
-Fast environment/model smoke test:
+Она отражает недельную сезонность и используется как интерпретируемый baseline.
+
+## CatBoost
+
+Обучается единая глобальная регрессионная модель. `station_id` передаётся CatBoost как категориальный признак.
+
+Проводится абляционный эксперимент:
+
+1. `history` — station ID, lag и rolling;
+2. `calendar` — history + календарные и циклические признаки;
+3. `weather` — calendar + погода;
+4. `traffic` — weather + дорожная ситуация.
+
+Набор выбирается по минимальному WAPE на validation. При равенстве используется RMSE.
+
+После выбора модель переобучается на `train + validation` и один раз оценивается на test.
+
+## Результаты validation
+
+| Набор признаков | MAE | RMSE | WAPE |
+|---|---:|---:|---:|
+| history | 3.885 | 5.632 | 30.35% |
+| calendar | 3.611 | 5.198 | 28.21% |
+| weather | 3.665 | 5.250 | 28.63% |
+| traffic | **3.604** | **5.158** | **28.15%** |
+
+Итоговый набор — `traffic`.
+
+## Test
+
+| Модель | MAE | RMSE | WAPE |
+|---|---:|---:|---:|
+| Seasonal Naive | 5.505 | 8.610 | 69.92% |
+| CatBoost | **2.751** | **4.309** | **34.94%** |
+
+CatBoost существенно превосходит недельный baseline по всем трём метрикам.
+
+## Покрытие дополнительных признаков
+
+- погода — 98.09%;
+- дорожная ситуация — 96.19%.
+
+## Сохранение результатов
+
+- метрики: `gold.model_metrics`;
+- прогнозы: `gold.forecast_results`;
+- локальная модель: `artifacts/models/`;
+- JSON эксперимента и feature importance: `artifacts/metrics/`.
+
+Бинарные артефакты модели не коммитятся в Git.
+
+## Запуск
 
 ```powershell
 citibike-pipeline train --smoke
-```
-
-Full reproducible experiment:
-
-```powershell
 citibike-pipeline train
-```
-
-Show persisted metrics:
-
-```powershell
 citibike-pipeline model-metrics
 ```
-
-The final CatBoost binary, experiment JSON and feature-importance CSV are saved
-under `artifacts/` and intentionally ignored by Git.

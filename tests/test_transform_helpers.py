@@ -1,4 +1,3 @@
-from sqlalchemy.engine import make_url
 
 from citibike_pipeline.transform.dbt_runner import _dbt_env
 

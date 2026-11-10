@@ -7,7 +7,6 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-
 HISTORY_FEATURES = [
     "station_id",
     "lag_1",

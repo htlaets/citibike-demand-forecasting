@@ -10,7 +10,6 @@ from sqlalchemy import Engine, text
 
 from citibike_pipeline.database.connection import get_engine
 
-
 METRIC_SQL = """
 INSERT INTO gold.model_metrics (
     model_name,
