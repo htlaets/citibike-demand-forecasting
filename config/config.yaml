@@ -1,34 +1,58 @@
 project:
+  name: citibike-demand-forecasting
+  timezone: America/New_York
   raw_data_dir: data/raw
-  quality_data_dir: data/quality
+  quarantine_data_dir: data/quarantine
+  artifacts_dir: artifacts
+
+database:
+  url_env: DATABASE_URL
+  connect_timeout_seconds: 10
 
 http:
   timeout_seconds: 30
-  retries: 3
-  backoff_factor: 0.5
-  user_agent: citibike-demand-forecasting/0.1.0
+  retries: 4
+  backoff_factor: 1.0
+  user_agent: citibike-demand-forecasting/1.0
 
 sources:
-  citibike:
+  citibike_trips:
+    base_url: https://s3.amazonaws.com/tripdata
+    source_type: zip_csv
+    incremental_unit: month
+
+  citibike_gbfs:
     discovery_url: https://gbfs.citibikenyc.com/gbfs/gbfs.json
+    source_type: rest_json
     feeds:
       - station_information
       - station_status
 
   weather:
-    url: https://api.open-meteo.com/v1/forecast
+    historical_url: https://archive-api.open-meteo.com/v1/archive
+    forecast_url: https://api.open-meteo.com/v1/forecast
+    source_type: rest_json
     latitude: 40.7128
     longitude: -74.0060
     timezone: America/New_York
-    forecast_days: 7
     hourly:
       - temperature_2m
       - relative_humidity_2m
       - precipitation
+      - rain
+      - snowfall
       - weather_code
       - wind_speed_10m
 
   traffic:
     url: https://data.cityofnewyork.us/resource/i4gi-tjb9.json
-    limit: 5000
-    latest_per_link: true
+    source_type: socrata_json
+    page_size: 5000
+
+quality:
+  freshness_hours:
+    citibike_gbfs: 1
+    weather: 48
+    traffic: 48
+  station_latitude_range: [40.0, 42.0]
+  station_longitude_range: [-75.0, -72.0]
