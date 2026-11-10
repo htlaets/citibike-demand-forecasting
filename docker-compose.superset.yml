@@ -1,0 +1,88 @@
+x-superset-common: &superset-common
+  build:
+    context: .
+    dockerfile: docker/superset/Dockerfile
+  image: citibike-superset:6.0.0
+  restart: unless-stopped
+  environment: &superset-env
+    SUPERSET_CONFIG_PATH: /app/pythonpath/superset_config.py
+    SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:-citibike-local-superset-secret-key-change-me}
+    SUPERSET_METADATA_DB_URI: postgresql+psycopg2://superset:superset@superset-db:5432/superset
+    CITIBIKE_DB_HOST: postgres
+    CITIBIKE_DB_PORT: "5432"
+    CITIBIKE_DB_NAME: ${POSTGRES_DB:-citibike}
+    CITIBIKE_DB_USER: ${POSTGRES_USER:-citibike}
+    CITIBIKE_DB_PASSWORD: ${POSTGRES_PASSWORD:-citibike}
+    SUPERSET_ADMIN_USERNAME: ${SUPERSET_ADMIN_USERNAME:-admin}
+    SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:-admin}
+    SUPERSET_ADMIN_EMAIL: ${SUPERSET_ADMIN_EMAIL:-admin@example.com}
+  volumes:
+    - ./superset:/app/pythonpath:ro
+    - superset_home:/app/superset_home
+  networks:
+    - citibike-network
+
+services:
+  superset-db:
+    image: postgres:16-alpine
+    container_name: citibike-superset-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: superset
+      POSTGRES_USER: superset
+      POSTGRES_PASSWORD: superset
+      TZ: UTC
+    volumes:
+      - superset_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U superset -d superset"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+    networks:
+      - citibike-network
+
+  superset-init:
+    <<: *superset-common
+    container_name: citibike-superset-init
+    restart: "no"
+    depends_on:
+      superset-db:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    command: ["/bin/bash", "/app/pythonpath/init.sh"]
+
+  superset:
+    <<: *superset-common
+    container_name: citibike-superset
+    depends_on:
+      superset-init:
+        condition: service_completed_successfully
+    command:
+      - /bin/bash
+      - -c
+      - >
+        gunicorn
+        --bind 0.0.0.0:8088
+        --workers 2
+        --threads 4
+        --timeout 120
+        "superset.app:create_app()"
+    ports:
+      - "${SUPERSET_PORT:-8088}:8088"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8088/health', timeout=5)\""
+        ]
+      interval: 10s
+      timeout: 8s
+      retries: 20
+      start_period: 30s
+
+volumes:
+  superset_db_data:
+  superset_home:
