@@ -48,6 +48,8 @@ sources:
     url: https://data.cityofnewyork.us/resource/i4gi-tjb9.json
     source_type: socrata_json
     page_size: 5000
+    max_pages_per_run: 100
+    bootstrap_since_hours: 24
 
 quality:
   freshness_hours:

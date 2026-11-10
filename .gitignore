@@ -15,3 +15,11 @@ data/raw/**/*.json
 data/quality/**/*.json
 !data/raw/.gitkeep
 !data/quality/.gitkeep
+
+data/raw/**
+!data/raw/.gitkeep
+data/quarantine/**
+data/raw/**
+!data/raw/.gitkeep
+data/quarantine/**
+!data/quarantine/.gitkeep

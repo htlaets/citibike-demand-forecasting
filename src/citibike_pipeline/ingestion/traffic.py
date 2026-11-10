@@ -1,33 +1,216 @@
-"""NYC DOT real-time traffic speed loader."""
+"""Incremental NYC DOT Traffic Speeds ingestion through Socrata."""
 
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
+from sqlalchemy import Engine
+
+from citibike_pipeline.database.connection import get_engine
+from citibike_pipeline.database.metadata import (
+    finish_load,
+    get_watermark,
+    set_watermark,
+    start_load,
+)
 from citibike_pipeline.http import HttpClient, SourceRequestError
+from citibike_pipeline.ingestion.common import execute_batch
+
+NYC_TZ = ZoneInfo("America/New_York")
+
+INSERT_SQL = """
+INSERT INTO raw.traffic_speed (
+    link_id, data_as_of, speed, travel_time, borough, link_name,
+    encoded_poly_line, load_id
+)
+VALUES (
+    :link_id, :data_as_of, :speed, :travel_time, :borough, :link_name,
+    :encoded_poly_line, :load_id
+)
+ON CONFLICT (link_id, data_as_of) DO NOTHING
+"""
 
 
-def load(client: HttpClient, config: dict[str, Any]) -> list[dict[str, Any]]:
-    """Download the latest known traffic observation for every road link."""
-    url = str(config["url"])
-    params: dict[str, Any] = {
-        "$limit": int(config.get("limit", 5000)),
-        "$order": "data_as_of DESC",
-    }
-    headers = {}
-    app_token = os.getenv("NYC_OPEN_DATA_APP_TOKEN")
-    if app_token:
-        headers["X-App-Token"] = app_token
+def _parse_socrata_time(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=NYC_TZ)
+    return parsed.astimezone(timezone.utc)
 
-    payload = client.get_json(url, params=params, headers=headers or None)
-    if not isinstance(payload, list) or not all(isinstance(row, dict) for row in payload):
-        raise SourceRequestError("NYC DOT response must be a list of objects")
-    if config.get("latest_per_link", True):
-        latest_by_link: dict[str, dict[str, Any]] = {}
-        for row in payload:
-            link_id = row.get("link_id")
-            if link_id is not None and str(link_id) not in latest_by_link:
-                latest_by_link[str(link_id)] = row
-        return list(latest_by_link.values())
-    return payload
+
+def _number(value: Any) -> float | None:
+    try:
+        return float(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize(rows: list[dict[str, Any]], load_id: int) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for row in rows:
+        if not row.get("link_id") or not row.get("data_as_of"):
+            continue
+        normalized.append(
+            {
+                "link_id": str(row["link_id"]),
+                "data_as_of": _parse_socrata_time(str(row["data_as_of"])),
+                "speed": _number(row.get("speed")),
+                "travel_time": _number(row.get("travel_time")),
+                "borough": row.get("borough"),
+                "link_name": row.get("link_name"),
+                "encoded_poly_line": row.get("encoded_poly_line"),
+                "load_id": load_id,
+            }
+        )
+    return normalized
+
+
+def _source_latest_timestamp(
+    client: HttpClient,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+) -> datetime:
+    payload = client.get_json(
+        url,
+        params={
+            "$select": "data_as_of",
+            "$where": "data_as_of is not null",
+            "$order": "data_as_of DESC",
+            "$limit": 1,
+        },
+        headers=headers,
+    )
+    if not isinstance(payload, list) or not payload:
+        raise SourceRequestError(
+            "NYC DOT Traffic Speeds returned no rows while determining "
+            "the latest source timestamp."
+        )
+
+    value = payload[0].get("data_as_of")
+    if not value:
+        raise SourceRequestError("Latest NYC DOT row has no data_as_of value")
+    return _parse_socrata_time(str(value))
+
+
+def ingest(
+    client: HttpClient,
+    config: dict[str, Any],
+    *,
+    since_hours: int | None = None,
+    engine: Engine | None = None,
+) -> dict[str, int | str]:
+    db = engine or get_engine()
+    cfg = config["sources"]["traffic"]
+    wm = get_watermark("traffic", db)
+
+    token = os.getenv("NYC_OPEN_DATA_APP_TOKEN")
+    headers = {"X-App-Token": token} if token else None
+    url = str(cfg["url"])
+
+    bootstrap_hours: int | None = None
+    source_latest: datetime | None = None
+
+    if wm.timestamp:
+        start = wm.timestamp
+    else:
+        bootstrap_hours = int(since_hours or cfg.get("bootstrap_since_hours", 24))
+        if bootstrap_hours <= 0:
+            raise ValueError("traffic bootstrap lookback must be greater than zero")
+        source_latest = _source_latest_timestamp(client, url, headers=headers)
+        start = source_latest - timedelta(hours=bootstrap_hours)
+
+    load_id = start_load(
+        "traffic",
+        run_key=start.isoformat(),
+        watermark_from=wm.timestamp.isoformat() if wm.timestamp else None,
+        engine=db,
+    )
+    received = inserted = rejected = 0
+    latest: datetime | None = None
+
+    try:
+        page_size = int(cfg.get("page_size", 5000))
+        max_pages = int(cfg.get("max_pages_per_run", 100))
+        offset = 0
+
+        with db.begin() as connection:
+            for _ in range(max_pages):
+                local_start = start.astimezone(NYC_TZ)
+                where_parts = [
+                    f"data_as_of > '{local_start.strftime('%Y-%m-%dT%H:%M:%S')}'"
+                ]
+
+                if source_latest is not None:
+                    local_end = source_latest.astimezone(NYC_TZ)
+                    where_parts.append(
+                        f"data_as_of <= '{local_end.strftime('%Y-%m-%dT%H:%M:%S')}'"
+                    )
+
+                params = {
+                    "$limit": page_size,
+                    "$offset": offset,
+                    "$where": " AND ".join(where_parts),
+                    "$order": "data_as_of ASC, link_id ASC",
+                }
+                payload = client.get_json(url, params=params, headers=headers)
+                if not isinstance(payload, list):
+                    raise SourceRequestError("NYC DOT response must be a JSON array")
+                if not payload:
+                    break
+
+                received += len(payload)
+                rows = _normalize(payload, load_id)
+                rejected += len(payload) - len(rows)
+                inserted += execute_batch(connection, INSERT_SQL, rows)
+
+                if rows:
+                    page_latest = max(row["data_as_of"] for row in rows)
+                    latest = max(latest, page_latest) if latest else page_latest
+
+                if len(payload) < page_size:
+                    break
+                offset += page_size
+            else:
+                raise RuntimeError(
+                    "NYC DOT max_pages_per_run reached; increase it or run ingestion again."
+                )
+
+        if latest:
+            set_watermark("traffic", timestamp=latest, engine=db)
+
+        finish_load(
+            load_id,
+            status="SUCCESS",
+            watermark_to=latest.isoformat() if latest else None,
+            rows_received=received,
+            rows_inserted=inserted,
+            rows_rejected=rejected,
+            engine=db,
+        )
+
+        result: dict[str, int | str] = {
+            "received": received,
+            "inserted": inserted,
+            "rejected": rejected,
+            "watermark": latest.isoformat() if latest else "",
+        }
+        if bootstrap_hours is not None:
+            result["bootstrap_hours"] = bootstrap_hours
+            result["source_latest"] = source_latest.isoformat() if source_latest else ""
+        return result
+
+    except Exception as exc:
+        finish_load(
+            load_id,
+            status="FAILED",
+            rows_received=received,
+            rows_inserted=inserted,
+            rows_rejected=rejected,
+            error=exc,
+            engine=db,
+        )
+        raise
